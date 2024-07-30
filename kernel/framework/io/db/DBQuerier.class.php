@@ -75,7 +75,7 @@ class DBQuerier implements SQLQuerier
 	/**
 	 * insert the values into the <code>$table_name</code> table
 	 * @param string $table_name the name of the table on which work will be done
-	 * @param string[string] $columns the map where columns are keys and values values
+	 * @param array $columns the map where columns are keys and values values
 	 * @return InjectQueryResult the query result set
 	 */
 	public function insert($table_name, array $columns)
@@ -89,10 +89,10 @@ class DBQuerier implements SQLQuerier
 	 * update the values of rows matching the <code>$condition</code> into the
 	 * <code>$table_name</code> table
 	 * @param string $table_name the name of the table on which work will be done
-	 * @param string[string] $columns the map where columns are keys and values values
+	 * @param array $columns the map where columns are keys and values values
 	 * @param string $condition the update condition beginning just after the where clause.
 	 * For example, <code>"length > 50 and weight < 100"</code>
-	 * @param string[string] $parameters the query_var map
+	 * @param array $parameters the query_var map
 	 * @return InjectQueryResult the query result set
 	 */
 	public function update($table_name, array $columns, $condition, array $parameters = array())
@@ -153,7 +153,7 @@ class DBQuerier implements SQLQuerier
 	/**
 	 * retrieve a single row for executes the <code>$query</code> sql request and returns row
 	 * @param string $query the query to execute
-	 * @param string[string] $parameters the query_var map
+	 * @param array $parameters the query_var map
 	 * @return mixed the value of the returned row
 	 */
 	public function select_single_row_query($query, $parameters = array())

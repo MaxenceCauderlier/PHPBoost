@@ -90,7 +90,7 @@ class MappingModel
 	}
 
 	/**
-	 * @return MappingModelField[]
+	 * @return MappingModel[]
 	 */
 	public function get_joins()
 	{
