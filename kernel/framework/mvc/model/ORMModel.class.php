@@ -2,134 +2,478 @@
 
 abstract class ORMModel
 {
-    protected static $_connection = null;
-    protected static $_functions = null;
+    protected static $primary_key = 'id';
+    protected $query = '';
+    protected $bindings = [];
+    protected $relations = [];
 
-    protected $_properties = [];
+    protected $attributes = [];
 
-    abstract public static function get_table_name();
+    abstract public static function get_table_name(): string;
 
-    public static function get_primary_key()
-    {
-        return 'id';
+    /**
+     * Initializes the ORMModel object.
+     *
+     * @return void
+     */
+    public function __construct($attributes = []) {
+        $this->attributes = $attributes;
     }
 
-    public static function has_many()
+    /**
+     * Returns the database querier.
+     *
+     * @return DBQuerier the database querier
+     */
+    protected function get_querier(): DBQuerier
     {
-        return false;
+        return PersistenceContext::get_querier();
+    }
+    
+    /**
+     * Adds a belongs_to relationship to the model.
+     *
+     * @param string $related_model The class name of the related model.
+     * @param string $foreign_key The foreign key column name.
+     * @param string|null $local_key The local key column name. Defaults to the primary key.
+     * @return self
+     */
+    public function belongs_to($related_model, $foreign_key, $local_key = false): self
+    {
+        if ($local_key === false) {
+            $local_key = static::$primary_key;
+        }
+        $this->relations[] = [
+            'type' => 'belongs_to',
+            'model' => $related_model,
+            'foreign_key' => $foreign_key,
+            'local_key' => $local_key
+        ];
+        return $this;
+    }
+    
+    /**
+     * Adds a has_many relationship to the model.
+     *
+     * @param string $related_model The class name of the related model.
+     * @param string $foreign_key The foreign key column name.
+     * @param string|null $local_key The local key column name. Defaults to the primary key.
+     * @return self
+     */
+    public function has_many($related_model, $foreign_key, $local_key = false): self
+    {
+        if ($local_key === false) {
+            $local_key = static::$primary_key;
+        }
+        $this->relations[] = [
+            'type' => 'has_many',
+            'model' => $related_model,
+            'foreign_key' => $foreign_key,
+            'local_key' => $local_key
+        ];
+        return $this;
+    }
+    
+    /**
+     * Adds a has_many_through relationship to the model.
+     *
+     * @param string $related_model The class name of the related model.
+     * @param string $through_model The class name of the through model.
+     * @param string $first_key The key on the through model that references the current model.
+     * @param string $second_key The key on the through model that references the related model.
+     * @param string|null $local_key The local key column name. Defaults to the primary key.
+     * @param string|null $second_local_key The local key column name of the related model. Defaults to the primary key.
+     * @return self
+     */
+    public function has_many_through($related_model, $through_model, $first_key, $second_key, $local_key = false, $second_local_key = false): self
+    {
+        if ($local_key === false) {
+            $local_key = static::$primary_key;
+        }
+        if ($second_local_key === false) {
+            $second_local_key = static::$primary_key;
+        }
+        $this->relations[] = [
+            'type' => 'has_many_through',
+            'model' => $related_model,
+            'through' => $through_model,
+            'first_key' => $first_key,
+            'second_key' => $second_key,
+            'local_key' => $local_key,
+            'second_local_key' => $second_local_key
+        ];
+        return $this;
     }
 
-    public static function belongs_to()
+    /**
+     * Adds a has_one relationship to the model.
+     *
+     * @param string $related_model The class name of the related model.
+     * @param string $foreign_key The foreign key column name.
+     * @param string|null $local_key The local key column name. Defaults to the primary key.
+     * @return self
+     */
+    public function has_one($related_model, $foreign_key, $local_key = false): self
     {
-        return false;
+        if ($local_key === false) {
+            $local_key = static::$primary_key;
+        }
+        $this->relations[] = [
+            'type' => 'has_one',
+            'model' => $related_model,
+            'foreign_key' => $foreign_key,
+            'local_key' => $local_key
+        ];
+        return $this;
     }
 
-    public static function has_one()
+    /**
+     * Execute the query and retrieve the results with relations.
+     *
+     * This function executes the query stored in the $this->query property and
+     * retrieves the results. It then creates objects of the current class and
+     * populates their attributes with the query results. If there are any relations
+     * defined in the $this->relations property, it will load them using eager
+     * loading.
+     *
+     * @return array[ORMModel] An array of objects of the current class.
+     */
+    public function get():array
     {
-        return false;
+        echo $this->query;
+        $this->query = (stripos($this->query, 'SELECT') === false) ?  "SELECT * FROM " . static::get_table_name() . $this->query : $this->query;
+        $results = self::get_querier()->select($this->query, $this->bindings);
+        $class_name = get_called_class();
+        $objects = [];
+        while ($row = $results->fetch()) {
+            $obj = new $class_name();
+            foreach ($row as $key => $value) {
+                $obj->attributes[$key] = $value;
+            }
+            $objects[] = $obj;
+        }
+
+        if (!empty($this->relations)) {
+            $this->load_eager_relations($objects);
+        }
+
+        $this->reset();
+        $results->dispose();
+        return $objects;
     }
 
-    public static function find_by_pk($value)
+    /**
+     * Load relations using eager loading for a set of objects.
+     *
+     * @param array[ORMModel] $objects The objects to load relations for.
+     * @return void
+     */
+    protected function load_eager_relations(&$objects)
     {
-        return static::find_by_field(static::get_primary_key(), $value);
+        foreach ($this->relations as $relation) {
+            switch ($relation['type']) {
+                case 'belongs_to':
+                    $this->load_belongs_to_relation($objects, $relation);
+                    break;
+                case 'has_many':
+                    $this->load_has_many_relation($objects, $relation);
+                    break;
+                case 'has_one':
+                    $this->load_has_one_relation($objects, $relation);
+                    break;
+                case 'has_many_through':
+                    $this->load_has_many_through_relation($objects, $relation);
+                    break;
+            }
+        }
     }
 
-    public static function find_by_field(string $field, $value)
+    /**
+     * Load a belongs_to relation using eager loading for a set of objects.
+     *
+     * @param array[ORMModel] &$objects The objects to load the relation for.
+     * @param array $relation The relation to load.
+     * @return void
+     */
+    protected function load_belongs_to_relation(&$objects, $relation)
     {
-        static::get_functions()->select_one_by_field($field, $value);
-        return static::$_functions;
+        $related_model = new $relation['model']();
+        $foreign_keys = array_unique(array_map(function ($result) use ($relation) {
+            return $result->{$relation['foreign_key']};
+        }, $objects));
+
+        if (empty($foreign_keys)) {
+            return;
+        }
+
+        $related_records = $related_model->where_in($relation['local_key'], $foreign_keys)->get();
+
+        $related_map = [];
+        foreach ($related_records as $record) {
+            $related_map[$record->{$relation['local_key']}] = $record;
+        }
+
+        foreach ($objects as $result) {
+            $foreign_key_value = $result->{$relation['foreign_key']};
+            $relation_name = strtolower($relation['model']);
+            $result->$relation_name = $related_map[$foreign_key_value] ?? null;
+        }
+    }
+
+    // Méthode pour charger une relation has_many avec eager loading
+    protected function load_has_many_relation(&$objects, $relation)
+    {
+        $related_model = new $relation['model']();
+        $local_keys = array_unique(array_map(function ($result) use ($relation) {
+            return $result->attributes[$relation['local_key']];
+        }, $objects));
+
+        if (empty($local_keys)) {
+            return;
+        }
+
+        /**
+         * @var array[ORMModel] $related_records
+         */
+        $related_records = $related_model->where_in($relation['foreign_key'], $local_keys)->get();
+
+        $related_map = [];
+        foreach ($related_records as $record) {
+            $related_map[$record->attributes[$relation['foreign_key']]][] = $record;
+        }
+        var_dump($related_map);
+        foreach ($objects as $result) {
+            echo "<br />";
+            var_dump($result);
+            echo '_____________________' . $relation['local_key'];
+            $local_key_value = $result->attributes[$relation['local_key']];
+            $relation_name = strtolower($relation['model']) . 's';
+            $result->attributes[$relation_name] = $related_map[$local_key_value] ?? [];
+        }
+    }
+
+    // Méthode pour charger une relation has_one avec eager loading
+    protected function load_has_one_relation(&$objects, $relation)
+    {
+        $related_model = new $relation['model']();
+        $local_keys = array_unique(array_map(function ($result) use ($relation) {
+            return $result->{$relation['local_key']};
+        }, $objects));
+
+        if (empty($local_keys)) {
+            return;
+        }
+
+        $related_records = $related_model->where_in($relation['foreign_key'], $local_keys)->get();
+
+        $related_map = [];
+        foreach ($related_records as $record) {
+            $related_map[$record->{$relation['foreign_key']}] = $record;
+        }
+
+        foreach ($objects as $result) {
+            $local_key_value = $result->{$relation['local_key']};
+            $relation_name = strtolower($relation['model']);
+            $result->$relation_name = $related_map[$local_key_value] ?? null;
+        }
+    }
+
+    // Méthode pour charger une relation has_many_through avec eager loading
+    protected function load_has_many_through_relation(&$objects, $relation)
+    {
+        $through_model = new $relation['through']();
+        $local_keys = array_unique(array_map(function ($result) use ($relation) {
+            return $result->{$relation['local_key']};
+        }, $objects));
+
+        if (empty($local_keys)) {
+            return;
+        }
+
+        $through_records = $through_model->where_in($relation['first_key'], $local_keys)->get();
+
+        $second_keys = array_unique(array_map(function ($through_record) use ($relation) {
+            return $through_record->{$relation['second_key']};
+        }, $through_records));
+
+        if (empty($second_keys)) {
+            return;
+        }
+
+        $related_model = new $relation['model']();
+        $related_records = $related_model->where_in($relation['second_local_key'], $second_keys)->get();
+
+        $through_map = [];
+        foreach ($through_records as $through_record) {
+            $through_map[$through_record->{$relation['first_key']}][] = $through_record->{$relation['second_key']};
+        }
+
+        $related_map = [];
+        foreach ($related_records as $related_record) {
+            $related_map[$related_record->{$relation['second_local_key']}] = $related_record;
+        }
+
+        foreach ($objects as $result) {
+            $local_key_value = $result->{$relation['local_key']};
+            $relation_name = strtolower($relation['model']) . 's';
+            $result->$relation_name = [];
+
+            if (isset($through_map[$local_key_value])) {
+                foreach ($through_map[$local_key_value] as $second_key) {
+                    if (isset($related_map[$second_key])) {
+                        $result->{$relation_name}[] = $related_map[$second_key];
+                    }
+                }
+            }
+        }
+    }
+
+    
+
+    // Méthode pour récupérer un seul résultat
+    public function first()
+    {
+        $this->query .= " LIMIT 1";
+        $results = $this->get();
+        return !empty($results) ? $results[0] : null;
+    }
+
+    // Méthodes existantes comme `find`, `save`, `delete`, etc.
+    public static function find($id)
+    {
+        $instance = new static();
+        return $instance->where(static::$primary_key, '=', $id)->first();
     }
 
     public static function all()
     {
-        static::get_functions()->select('*');
-        return static::$_functions;
+        $instance = new static();
+        return $instance->get();
     }
 
-    public static function raw($query)
+    public function count()
     {
-        static::get_functions()->raw($query);
-        return static::$_functions;
+        $this->query = "SELECT COUNT(*) FROM " . static::get_table_name() . $this->query;
+        $res = (int)$this->first()->attributes['COUNT(*)'];
+        $this->reset();
+        return $res;
     }
 
-    public static function select(...$fields)
-    {
-        if (count($fields) === 0)
-        {
-            $fields = ['*'];
+    public function save() {
+        if (isset($this->attributes[static::$primary_key])) {
+            return $this->update();
+        } else {
+            return $this->insert();
         }
-        static::get_functions()->select(...$fields);
-        return static::$_functions;
     }
 
-    public static function count(string $field = '*')
-    {
-        static::get_functions()->count($field);
-        return static::$_functions;
+    // Méthode pour insérer un nouvel enregistrement
+    protected function insert() {
+        $result = self::get_querier()->insert(static::get_table_name(), $this->attributes);
+        $this->attributes[static::$primary_key] = $result->get_last_inserted_id();
+        
+        return $this;
     }
 
-    protected static function get_querier()
-    {
-        return PersistenceContext::get_querier();
-    }
+    // Méthode pour mettre à jour un enregistrement
+    protected function update() {
+        self::get_querier()->update(static::get_table_name(), $this->attributes, 
+            'WHERE ' . static::$primary_key . '=:id', ['id' => $this->attributes[static::$primary_key]]);
 
-    protected static function get_functions()
-    {
-        if (static::$_functions === null)
-        {
-            static::$_functions = new ORMSQLFunctions(static::get_querier(), static::get_table_name(), static::class);
-        }
-        return static::$_functions;
-    }
-
-    public function save()
-    {
-        if (isset($this->_properties[static::get_primary_key()]))
-        {
-            // If there is a value for the primary key, it's an update
-            // Return the last inserted pk (ID)
-            return static::get_functions()->update($this)->execute();
-        }
-        // Return int of rows affected
-        return static::get_functions()->insert($this)->execute();
+        return $this;
     }
 
     public function delete()
     {
-        return static::get_functions()->delete($this)->execute();
-    }
-
-    public function get_raw_properties()
-    {
-        $own_properties = [];
-        foreach ($this->_properties as $key => $value)
+        if (isset($this->attributes[static::$primary_key])) 
         {
-            if (!is_object($value))
-            {
-                $own_properties[$key] = $value;
-            }
+            self::get_querier()->delete(static::get_table_name(), 'WHERE ' . static::$primary_key . '=:id', ['id' => $this->attributes[static::$primary_key]]);
+            $this->reset();
+            return true;
         }
-        return $own_properties;
+
+        return false;
     }
 
-    public function __set($name, $value)
+    // Méthode pour récupérer un enregistrement avec une condition
+    public function where($field, $operator, $value)
     {
-        $this->_properties[$name] = $value;
+        $this->query .= (stripos($this->query, 'WHERE') === false) ? " WHERE " : " AND ";
+        $this->query .= "$field $operator :$field";
+        $this->bindings[$field] = $value;
+        return $this;
     }
 
-    public function __get($name)
+    // Méthode pour récupérer les enregistrements avec une condition IN
+    public function where_in($field, array $values)
     {
-        return $this->_properties[$name] ?? null;
+        $placeholders = implode(',', $values);
+        $this->query .= (stripos($this->query, 'WHERE') === false) ? " WHERE " : " AND ";
+        $this->query .= "$field IN ($placeholders)";
+        return $this;
     }
 
-    public function __unset($name)
+    public function or_where($field, $operator, $value) {
+        $this->query .= " OR $field $operator :$field";
+        $this->bindings[$field] = $value;
+        return $this;
+    }
+
+    // Méthode pour débuter un groupe de conditions (parenthèses ouvrantes)
+    public function group_start() {
+        $this->query .= (stripos($this->query, 'WHERE') === false) ? " WHERE (" : " AND (";
+        return $this;
+    }
+
+    // Méthode pour débuter un groupe de conditions avec un OR (parenthèses ouvrantes)
+    public function or_group_start() {
+        $this->query .= " OR (";
+        return $this;
+    }
+
+    // Méthode pour terminer un groupe de conditions (parenthèses fermantes)
+    public function group_end() {
+        $this->query .= ")";
+        return $this;
+    }
+
+    public function order_by($field, $direction = 'ASC') {
+        $this->query .= " ORDER BY $field $direction";
+        return $this;
+    }
+
+    public function join($table, $first, $operator, $second, $type = 'INNER') {
+        $this->query .= " $type JOIN $table ON $first $operator $second";
+        return $this;
+    }
+
+    public function group_by($field) {
+        $this->query .= " GROUP BY $field";
+        return $this;
+    }
+
+    // Méthode pour ajouter une condition HAVING
+    public function having($field, $operator, $value) {
+        $this->query .= " HAVING $field $operator :$field";
+        $this->bindings[$field] = $value;
+        return $this;
+    }
+
+    // Méthode pour ajouter une limite LIMIT
+    public function limit($number) {
+        $this->query .= " LIMIT $number";
+        return $this;
+    }
+
+    // Méthode pour ajouter un offset OFFSET
+    public function offset($number) {
+        $this->query .= " OFFSET $number";
+        return $this;
+    }
+
+    public function reset()
     {
-        if (isset($this->_properties[$name]))
-        {
-            unset($this->_properties[$name]);
-        }
+        $this->query = '';
+        $this->bindings = [];
     }
-    
-
-
 }
