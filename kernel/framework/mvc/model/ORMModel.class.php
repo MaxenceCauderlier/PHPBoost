@@ -34,20 +34,18 @@ abstract class ORMModel
      * Adds a belongs_to relationship to the model.
      *
      * @param string $related_model The class name of the related model.
-     * @param string $foreign_key The foreign key column name.
-     * @param string|null $local_key The local key column name. Defaults to the primary key.
+     * @param string $foreign_key The foreign key column name in the main model
+     * @param string|null $local_key The local key column name in the related model. Defaults to 'id'.
      * @return self
      */
-    public function belongs_to($related_model, $foreign_key, $local_key = false): self
+    public function belongs_to(string $related_model, string $owner_name, string $foreign_key, string $local_key = 'id'): self
     {
-        if ($local_key === false) {
-            $local_key = static::$primary_key;
-        }
         $this->relations[] = [
             'type' => 'belongs_to',
             'model' => $related_model,
             'foreign_key' => $foreign_key,
-            'local_key' => $local_key
+            'local_key' => $local_key,
+            'owner_name' => $owner_name
         ];
         return $this;
     }
@@ -56,11 +54,12 @@ abstract class ORMModel
      * Adds a has_many relationship to the model.
      *
      * @param string $related_model The class name of the related model.
+     * @param string $items_name The name of the property that will contain the items.
      * @param string $foreign_key The foreign key column name.
      * @param string|null $local_key The local key column name. Defaults to the primary key.
      * @return self
      */
-    public function has_many($related_model, $foreign_key, $local_key = false): self
+    public function has_many(string $related_model, string $items_name, string $foreign_key, $local_key = false): self
     {
         if ($local_key === false) {
             $local_key = static::$primary_key;
@@ -69,7 +68,8 @@ abstract class ORMModel
             'type' => 'has_many',
             'model' => $related_model,
             'foreign_key' => $foreign_key,
-            'local_key' => $local_key
+            'local_key' => $local_key,
+            'items_name' => $items_name
         ];
         return $this;
     }
@@ -140,7 +140,6 @@ abstract class ORMModel
      */
     public function get():array
     {
-        echo $this->query;
         $this->query = (stripos($this->query, 'SELECT') === false) ?  "SELECT * FROM " . static::get_table_name() . $this->query : $this->query;
         $results = self::get_querier()->select($this->query, $this->bindings);
         $class_name = get_called_class();
@@ -215,8 +214,7 @@ abstract class ORMModel
 
         foreach ($objects as $result) {
             $foreign_key_value = $result->{$relation['foreign_key']};
-            $relation_name = strtolower($relation['model']);
-            $result->$relation_name = $related_map[$foreign_key_value] ?? null;
+            $result->attributes[$relation['owner_name']] = $related_map[$foreign_key_value] ?? null;
         }
     }
 
@@ -241,14 +239,9 @@ abstract class ORMModel
         foreach ($related_records as $record) {
             $related_map[$record->attributes[$relation['foreign_key']]][] = $record;
         }
-        var_dump($related_map);
         foreach ($objects as $result) {
-            echo "<br />";
-            var_dump($result);
-            echo '_____________________' . $relation['local_key'];
             $local_key_value = $result->attributes[$relation['local_key']];
-            $relation_name = strtolower($relation['model']) . 's';
-            $result->attributes[$relation_name] = $related_map[$local_key_value] ?? [];
+            $result->attributes[$relation['items_name']] = $related_map[$local_key_value] ?? [];
         }
     }
 
@@ -338,17 +331,10 @@ abstract class ORMModel
         return !empty($results) ? $results[0] : null;
     }
 
-    // Méthodes existantes comme `find`, `save`, `delete`, etc.
-    public static function find($id)
-    {
-        $instance = new static();
-        return $instance->where(static::$primary_key, '=', $id)->first();
-    }
 
-    public static function all()
+    public function find($id): ?ORMModel
     {
-        $instance = new static();
-        return $instance->get();
+        return $this->where(static::$primary_key, '=', $id)->first();
     }
 
     public function count()
@@ -476,4 +462,15 @@ abstract class ORMModel
         $this->query = '';
         $this->bindings = [];
     }
+
+    public function __set($name, $value)
+    {
+        $this->attributes[$name] = $value;
+    }
+
+    public function __get($name)
+    {
+        return $this->attributes[$name] ?? null;
+    }
+
 }
